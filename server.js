@@ -10,7 +10,7 @@ const HOST = process.env.HOST || '0.0.0.0';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin';
 const TOKEN_SECRET = process.env.TOKEN_SECRET || crypto.randomBytes(32).toString('hex');
 const TOKEN_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
-const CURRENCY = process.env.CURRENCY || 'USD';
+const CURRENCY = process.env.CURRENCY || 'PHP';
 
 if (!process.env.ADMIN_PASSWORD) {
   console.warn('[warn] ADMIN_PASSWORD not set — using default "admin". Set it before deploying.');

@@ -85,7 +85,7 @@ Stop it on the old one, copy `data/` (and `.env` if needed) to the new one, then
 | `TOKEN_SECRET` | Keeps admins signed in across restarts. |
 | `HOST` | `127.0.0.1` = only reachable through the tunnel (recommended). `0.0.0.0` = also from your local network at `http://<computer-ip>:3000`. |
 | `PORT` | App port (default 3000). |
-| `CURRENCY` | Price currency, e.g. `USD`, `PHP`, `EUR`. |
+| `CURRENCY` | Price currency (default `PHP`), e.g. `PHP`, `USD`, `EUR`. |
 | `TUNNEL_TOKEN` | Connects this computer to `prices.kregjonard.fun`. Secret. |
 | `DB_PATH` | Optional: database file location (default `data/pricechecker.db`). |
 
