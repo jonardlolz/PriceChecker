@@ -35,6 +35,12 @@ Copy the project folder to the computer, **including**:
 
 Do **not** copy `node_modules/` or `dist/`; they are recreated.
 
+**Starting fresh (e.g. after `git clone`)?** There is no `.env` in the repo. Create one from the template
+and fill in the values — see the comments inside it:
+```bash
+cp .env.example .env        # Windows: copy .env.example .env
+```
+
 Then, in a terminal opened in the project folder:
 ```bash
 npm install
