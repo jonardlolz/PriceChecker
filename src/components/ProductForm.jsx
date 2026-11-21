@@ -1,14 +1,16 @@
 import { useState } from 'react';
 import { api } from '../api.js';
 import CameraScanner from './CameraScanner.jsx';
+import { Field } from './Login.jsx';
 
 const EMPTY = { productId: '', barcode: '', productName: '', price: '' };
 
 /**
- * Add/edit form. Pass `initial` with an `id` to edit an existing product;
- * pass `initial` without an `id` (e.g. `{ barcode }`) to prefill a new one.
+ * Add a new shared product (any store; includes "your price"), or edit an existing
+ * shared product (admin only; no price — prices are edited per store).
+ * Pass `initial` with an `id` to edit; without an `id` (e.g. `{ barcode }`) to prefill a new one.
  */
-export default function ProductForm({ initial, title, onCancel, onSaved, onAuthError, autoFocusField = 'productId' }) {
+export default function ProductForm({ initial, title, onCancel, onSaved, onError, autoFocusField = 'productName' }) {
   const isEdit = initial?.id != null;
   const [form, setForm] = useState(() => ({
     ...EMPTY,
@@ -16,7 +18,6 @@ export default function ProductForm({ initial, title, onCancel, onSaved, onAuthE
       productId: initial.productId ?? '',
       barcode: initial.barcode ?? '',
       productName: initial.productName ?? '',
-      price: initial.price != null ? Number(initial.price).toFixed(2) : '',
     }),
   }));
   const [errors, setErrors] = useState({});
@@ -33,22 +34,29 @@ export default function ProductForm({ initial, title, onCancel, onSaved, onAuthE
       const saved = isEdit ? await api.updateProduct(initial.id, form) : await api.createProduct(form);
       onSaved(saved);
     } catch (err) {
-      if (Object.keys(err.fieldErrors || {}).length) setErrors(err.fieldErrors);
-      else onAuthError(err);
+      if (Object.keys(err.fieldErrors).length) setErrors(err.fieldErrors);
+      else onError(err);
       setBusy(false);
     }
   };
 
   return (
     <form className="card product-form" onSubmit={submit}>
-      <h2>{title ?? (isEdit ? `Edit product (DB ID ${initial.id})` : 'Add product')}</h2>
+      <h2>{title ?? (isEdit ? 'Edit shared product' : 'Add product')}</h2>
+      <p className="muted">
+        {isEdit
+          ? 'Changes apply to every store. Prices are not affected.'
+          : 'The product is shared with all stores. Your price is only for your store.'}
+      </p>
       <div className="grid">
         <Field label="Product Name" error={errors.productName}>
           <input value={form.productName} onChange={set('productName')} autoFocus={autoFocusField === 'productName'} />
         </Field>
-        <Field label="Price" error={errors.price}>
-          <input value={form.price} onChange={set('price')} inputMode="decimal" placeholder="0.00" />
-        </Field>
+        {!isEdit && (
+          <Field label="Your price (optional)" error={errors.price}>
+            <input value={form.price} onChange={set('price')} inputMode="decimal" placeholder="0.00" />
+          </Field>
+        )}
         <Field label="Product ID" error={errors.productId}>
           <input value={form.productId} onChange={set('productId')} autoFocus={autoFocusField === 'productId'} />
         </Field>
@@ -78,15 +86,5 @@ export default function ProductForm({ initial, title, onCancel, onSaved, onAuthE
         </button>
       </div>
     </form>
-  );
-}
-
-function Field({ label, error, children }) {
-  return (
-    <label className={error ? 'field has-error' : 'field'}>
-      <span>{label}</span>
-      {children}
-      {error && <small className="error">{error}</small>}
-    </label>
   );
 }

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import CameraScanner from '../components/CameraScanner.jsx';
-import Login from '../components/Login.jsx';
 import ProductForm from '../components/ProductForm.jsx';
-import { api, getToken, setToken } from '../api.js';
+import PriceForm from '../components/PriceForm.jsx';
+import { api } from '../api.js';
 import { useMoney } from '../money.js';
 
 const RESULT_TIMEOUT_MS = 10000;
@@ -10,38 +10,45 @@ const RESULT_TIMEOUT_MS = 10000;
 export default function ScannerPage() {
   const [code, setCode] = useState('');
   // status: idle | loading | found | notfound | error
-  // notfound may carry step: 'login' | 'form' while the user is adding the product
+  // `editing` is set while the user is typing a price ('price') or adding a product ('add');
+  // scans are ignored and the result stays on screen until they finish.
   const [state, setState] = useState({ status: 'idle' });
   const [camera, setCamera] = useState(false);
   const inputRef = useRef(null);
   const timerRef = useRef(null);
-  const addingRef = useRef(false);
+  const editingRef = useRef(false);
   const money = useMoney();
 
-  const adding = state.status === 'notfound' && !!state.step;
-  addingRef.current = adding;
+  const editing = !!state.editing;
+  editingRef.current = editing;
 
   const scheduleClear = useCallback(() => {
     clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => setState({ status: 'idle' }), RESULT_TIMEOUT_MS);
   }, []);
 
-  const lookup = useCallback(
-    async (raw) => {
-      const barcode = raw.trim();
-      // Ignore scans while the add-product form is open so typed details aren't lost.
-      if (!barcode || addingRef.current) return;
-      clearTimeout(timerRef.current);
-      setState({ status: 'loading', barcode });
-      try {
-        const product = await api.lookup(barcode);
-        setState({ status: 'found', product });
-      } catch (err) {
-        setState(err.status === 404 ? { status: 'notfound', barcode } : { status: 'error', message: err.message });
-      }
+  const show = useCallback(
+    (next) => {
+      setState(next);
       scheduleClear();
     },
     [scheduleClear]
+  );
+
+  const lookup = useCallback(
+    async (raw) => {
+      const barcode = raw.trim();
+      if (!barcode || editingRef.current) return;
+      clearTimeout(timerRef.current);
+      setState({ status: 'loading', barcode });
+      try {
+        show({ status: 'found', product: await api.lookup(barcode) });
+      } catch (err) {
+        if (err.status === 401) return; // signed out — the app shows the sign-in screen
+        show(err.status === 404 ? { status: 'notfound', barcode } : { status: 'error', message: err.message });
+      }
+    },
+    [show]
   );
 
   useEffect(() => () => clearTimeout(timerRef.current), []);
@@ -49,14 +56,14 @@ export default function ScannerPage() {
   // Keep the scan input focused so USB/Bluetooth "keyboard wedge" scanners always work,
   // except while the user is interacting with buttons or form fields.
   useEffect(() => {
-    if (adding) return;
+    if (editing) return;
     const refocus = (e) => {
       if (!e?.target?.closest?.('button, input, select, textarea, label')) inputRef.current?.focus();
     };
     refocus();
     window.addEventListener('click', refocus);
     return () => window.removeEventListener('click', refocus);
-  }, [adding]);
+  }, [editing]);
 
   const submit = (e) => {
     e.preventDefault();
@@ -64,19 +71,22 @@ export default function ScannerPage() {
     setCode('');
   };
 
-  const startAdding = () => {
+  const startEditing = (kind) => {
     clearTimeout(timerRef.current);
-    setState((s) => ({ ...s, step: getToken() ? 'form' : 'login' }));
+    setState((s) => ({ ...s, editing: kind }));
   };
 
-  const cancelAdding = () => {
-    setState((s) => ({ status: 'notfound', barcode: s.barcode }));
-    scheduleClear();
+  const stopEditing = () => show({ ...state, editing: undefined });
+
+  const onError = (err) => {
+    if (err.status !== 401) show({ status: 'error', message: err.message });
   };
+
+  const { product } = state;
 
   return (
     <div className="scanner-page">
-      {!adding && (
+      {state.editing !== 'add' && (
         <section className="result" aria-live="polite">
           {state.status === 'idle' && (
             <div className="result-idle">
@@ -87,11 +97,30 @@ export default function ScannerPage() {
           {state.status === 'loading' && <p className="muted">Looking up {state.barcode}…</p>}
           {state.status === 'found' && (
             <div className="result-found">
-              {state.added && <p className="badge">Product added</p>}
-              <p className="result-name">{state.product.productName}</p>
-              <p className="result-price">{money(state.product.price)}</p>
+              {state.badge && <p className="badge">{state.badge}</p>}
+              <p className="result-name">{product.productName}</p>
+              {state.editing === 'price' ? (
+                <PriceForm
+                  product={product}
+                  onCancel={stopEditing}
+                  onError={onError}
+                  onSaved={(p) => show({ status: 'found', product: p, badge: 'Price saved' })}
+                />
+              ) : product.price != null ? (
+                <>
+                  <p className="result-price">{money(product.price)}</p>
+                  <button className="link" onClick={() => startEditing('price')}>
+                    Change price
+                  </button>
+                </>
+              ) : (
+                <div className="no-price">
+                  <p className="result-noprice">No price set for your store</p>
+                  <button onClick={() => startEditing('price')}>Set your price</button>
+                </div>
+              )}
               <p className="muted">
-                Product ID {state.product.productId} · Barcode {state.product.barcode}
+                Product ID {product.productId} · Barcode {product.barcode}
               </p>
             </div>
           )}
@@ -99,47 +128,26 @@ export default function ScannerPage() {
             <div className="result-missing">
               <p className="result-name">New barcode</p>
               <p className="muted">
-                <span className="mono">{state.barcode}</span> isn’t in the database yet.
+                <span className="mono">{state.barcode}</span> isn’t in the product list yet.
               </p>
-              <button onClick={startAdding}>Add this product</button>
+              <button onClick={() => startEditing('add')}>Add this product</button>
             </div>
           )}
           {state.status === 'error' && <p className="error">{state.message}</p>}
         </section>
       )}
 
-      {state.step === 'login' && (
-        <Login
-          className="card product-form"
-          title="Add new product"
-          note={`Sign in as admin to add barcode ${state.barcode}.`}
-          onCancel={cancelAdding}
-          onLogin={() => setState((s) => ({ ...s, step: 'form' }))}
-        />
-      )}
-
-      {state.step === 'form' && (
+      {state.editing === 'add' && (
         <ProductForm
           initial={{ barcode: state.barcode }}
           title="Add new product"
-          autoFocusField="productName"
-          onCancel={cancelAdding}
-          onSaved={(product) => {
-            setState({ status: 'found', product, added: true });
-            scheduleClear();
-          }}
-          onAuthError={(err) => {
-            if (err.status === 401) {
-              setToken(null);
-              setState((s) => ({ ...s, step: 'login' }));
-            } else {
-              setState({ status: 'error', message: err.message });
-            }
-          }}
+          onCancel={stopEditing}
+          onError={onError}
+          onSaved={(p) => show({ status: 'found', product: p, badge: 'Product added' })}
         />
       )}
 
-      {!adding && (
+      {!editing && (
         <form className="scan-form" onSubmit={submit}>
           <input
             ref={inputRef}
@@ -157,7 +165,7 @@ export default function ScannerPage() {
         </form>
       )}
 
-      {camera && !adding && <CameraScanner onDetected={lookup} />}
+      {camera && !editing && <CameraScanner onDetected={lookup} />}
     </div>
   );
 }

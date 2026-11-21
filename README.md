@@ -1,6 +1,11 @@
 # Price Checker
 
-Barcode price checker (React + Vite) with an admin panel, an Express API and a SQLite database.
+Barcode price checker for sari-sari stores (React + Vite, Express API, SQLite).
+
+- **Products are shared** by every store (name, barcode, product ID).
+- **Prices are per store:** each tindahan signs in with its own account and sets its own prices.
+- Anyone can create a store account from the sign-in page. Any store can add a new product
+  (e.g. when it scans an unknown barcode); only the **admin** can edit or delete shared products.
 Public address: **https://prices.kregjonard.fun** (served through Cloudflare Tunnel).
 
 The same steps work on **Windows, macOS and Linux**.
@@ -81,8 +86,9 @@ Stop it on the old one, copy `data/` (and `.env` if needed) to the new one, then
 ## Settings (`.env`)
 | Setting | Purpose |
 |---|---|
-| `ADMIN_PASSWORD` | Admin login password. Change it here, then restart. |
-| `TOKEN_SECRET` | Keeps admins signed in across restarts. |
+| `ADMIN_USERNAME` | Username of the admin account (default `admin`). |
+| `ADMIN_PASSWORD` | Password for the admin account, used only when that account is first created on startup. Changing it later does **not** change an existing admin's password. |
+| `TOKEN_SECRET` | Keeps stores signed in across restarts (sessions last 30 days). |
 | `HOST` | `127.0.0.1` = only reachable through the tunnel (recommended). `0.0.0.0` = also from your local network at `http://<computer-ip>:3000`. |
 | `PORT` | App port (default 3000). |
 | `CURRENCY` | Price currency (default `PHP`), e.g. `PHP`, `USD`, `EUR`. |
@@ -106,10 +112,11 @@ Stop the app and copy the `data/` folder to back it up.
 - **Port 3000 already in use:** another copy is running; stop it or change `PORT` in `.env`.
 
 ## Data model
-| Column | Notes |
+| Table | Holds |
 |---|---|
-| `id` | Internal database ID (auto-increment, never edited) |
-| `product_id` | Your Product ID — unique, editable |
-| `barcode` | Unique |
-| `product_name` | |
-| `price_cents` | Stored as integer cents to avoid rounding errors |
+| `users` | One row per store account: `username` (unique, case-insensitive), `store_name`, scrypt `password_hash`, `is_admin` |
+| `products` | The shared catalog: `product_id` (unique), `barcode` (unique), `product_name`, `created_by` |
+| `store_prices` | Each store's price: (`user_id`, `product_id`) → `price_cents` (integer cents to avoid rounding errors) |
+
+Deleting a product also deletes every store's price for it. Databases from the older single-price
+version are migrated automatically on first start; their prices become the admin account's prices.
