@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22.13"
+    "node": ">=24"
   },
   "scripts": {
     "dev": "concurrently -n api,web -c blue,green \"node --env-file-if-exists=.env --watch server.js\" \"vite\"",
@@ -12,7 +12,8 @@
     "build": "vite build",
     "start": "node --env-file-if-exists=.env server.js",
     "tunnel": "node scripts/tunnel.js",
-    "live": "npm run build && concurrently -k -n app,tunnel -c blue,magenta \"npm start\" \"npm run tunnel\""
+    "live": "npm run build && concurrently -k -n app,tunnel -c blue,magenta \"npm start\" \"npm run tunnel\"",
+    "test": "node scripts/smoke-test.js"
   },
   "dependencies": {
     "@zxing/browser": "^0.2.1",

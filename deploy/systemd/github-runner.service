@@ -1,0 +1,18 @@
+# GitHub Actions self-hosted runner that performs deploys. Installed by deploy/setup.sh.
+#   status:  systemctl --user status github-runner
+#   logs:    journalctl --user -u github-runner -f
+[Unit]
+Description=GitHub Actions runner (Price Checker deploys)
+After=network-online.target
+
+[Service]
+WorkingDirectory=%h/actions-runner
+ExecStart=%h/actions-runner/run.sh
+Restart=always
+RestartSec=10
+KillMode=process
+KillSignal=SIGINT
+TimeoutStopSec=60
+
+[Install]
+WantedBy=default.target

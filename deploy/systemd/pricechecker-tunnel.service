@@ -1,0 +1,17 @@
+# Cloudflare Tunnel for prices.kregjonard.fun (production). Installed by deploy/setup.sh.
+# Reads TUNNEL_TOKEN and PORT from ~/price-checker/shared/.env.
+#   status:  systemctl --user status pricechecker-tunnel
+#   logs:    journalctl --user -u pricechecker-tunnel -f
+[Unit]
+Description=Price Checker Cloudflare Tunnel
+After=network-online.target pricechecker.service
+
+[Service]
+WorkingDirectory=%h/price-checker/current
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/price-checker/bin/node scripts/tunnel.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
