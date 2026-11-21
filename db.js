@@ -24,25 +24,34 @@ db.exec(`
   );
 `);
 
-// Older versions stored a single price directly on `products`. Move those rows to the new
-// layout once; their prices are given to `legacyOwnerId` (the admin) when known.
-export function migrate(legacyOwnerId) {
-  const cols = db.prepare('PRAGMA table_info(products)').all().map((c) => c.name);
-  const legacy = cols.includes('price_cents');
+const productsTableSql = (name) => `
+  CREATE TABLE ${name} (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    barcode      TEXT    UNIQUE,  -- optional: loose (tingi) items have none; NULLs don't clash
+    product_name TEXT    NOT NULL,
+    created_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at   TEXT    NOT NULL DEFAULT (datetime('now'))
+  )`;
 
+// Brings any older database up to the current layout. Product `id`s are always kept,
+// so every store's prices stay attached to the right product.
+//   v1: products had a single `price_cents` and a `product_id` code → prices go to `legacyOwnerId` (the admin)
+//   v2: products had a `product_id` code (now removed; `id` identifies a product)
+//   v3: `barcode` was required (now optional)
+export function migrate(legacyOwnerId) {
+  const info = db.prepare('PRAGMA table_info(products)').all();
+  const cols = info.map((c) => c.name);
+  const singlePrice = cols.includes('price_cents');
+  const barcodeRequired = !!info.find((c) => c.name === 'barcode')?.notnull;
+  const rebuild = cols.includes('product_id') || singlePrice || barcodeRequired;
+
+  // Rebuilding `products` means dropping it; with foreign keys on, that would cascade-delete
+  // every store's prices. This PRAGMA only takes effect outside a transaction.
+  db.exec('PRAGMA foreign_keys = OFF');
   db.exec('BEGIN');
   try {
-    if (legacy) db.exec('ALTER TABLE products RENAME TO products_legacy');
     db.exec(`
-      CREATE TABLE IF NOT EXISTS products (
-        id           INTEGER PRIMARY KEY AUTOINCREMENT,
-        product_id   TEXT    NOT NULL UNIQUE,
-        barcode      TEXT    NOT NULL UNIQUE,
-        product_name TEXT    NOT NULL,
-        created_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
-        created_at   TEXT    NOT NULL DEFAULT (datetime('now')),
-        updated_at   TEXT    NOT NULL DEFAULT (datetime('now'))
-      );
       CREATE TABLE IF NOT EXISTS store_prices (
         user_id     INTEGER NOT NULL REFERENCES users(id)    ON DELETE CASCADE,
         product_id  INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
@@ -51,24 +60,44 @@ export function migrate(legacyOwnerId) {
         PRIMARY KEY (user_id, product_id)
       );
       CREATE INDEX IF NOT EXISTS store_prices_product ON store_prices(product_id);
+
+      -- Each store's "quick picks": big buttons on the scanner for items sold all day.
+      CREATE TABLE IF NOT EXISTS store_favorites (
+        user_id    INTEGER NOT NULL REFERENCES users(id)    ON DELETE CASCADE,
+        product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+        position   INTEGER NOT NULL,
+        PRIMARY KEY (user_id, product_id)
+      );
+      CREATE INDEX IF NOT EXISTS store_favorites_product ON store_favorites(product_id);
     `);
-    if (legacy) {
+
+    if (!rebuild) {
+      db.exec(productsTableSql('products').replace('CREATE TABLE', 'CREATE TABLE IF NOT EXISTS'));
+    } else {
+      // SQLite's recommended way to change a table: create new → copy → drop old → rename.
+      const createdBy = cols.includes('created_by') ? 'created_by' : 'NULL';
+      db.exec(productsTableSql('products_new'));
       db.exec(`
-        INSERT INTO products (id, product_id, barcode, product_name, created_at, updated_at)
-        SELECT id, product_id, barcode, product_name, created_at, updated_at FROM products_legacy`);
-      if (legacyOwnerId != null) {
+        INSERT INTO products_new (id, barcode, product_name, created_by, created_at, updated_at)
+        SELECT id, NULLIF(trim(barcode), ''), product_name, ${createdBy}, created_at, updated_at FROM products`);
+      if (singlePrice && legacyOwnerId != null) {
         db.prepare(`
-          INSERT INTO store_prices (user_id, product_id, price_cents)
-          SELECT $owner, id, price_cents FROM products_legacy`).run({ owner: legacyOwnerId });
+          INSERT OR IGNORE INTO store_prices (user_id, product_id, price_cents)
+          SELECT $owner, id, price_cents FROM products`).run({ owner: legacyOwnerId });
       }
-      const { n } = db.prepare('SELECT count(*) AS n FROM products_legacy').get();
-      db.exec('DROP TABLE products_legacy');
-      console.log(`[db] Migrated ${n} product(s) to the multi-store layout.`);
+      const { n } = db.prepare('SELECT count(*) AS n FROM products').get();
+      db.exec('DROP TABLE products');
+      db.exec('ALTER TABLE products_new RENAME TO products');
+      const broken = db.prepare('PRAGMA foreign_key_check').all();
+      if (broken.length) throw new Error(`Migration left ${broken.length} broken reference(s); rolled back.`);
+      console.log(`[db] Migrated ${n} product(s) to the current layout.`);
     }
     db.exec('COMMIT');
   } catch (err) {
     db.exec('ROLLBACK');
     throw err;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
   }
   stmts = prepareProductStmts();
 }
@@ -110,23 +139,26 @@ export const makeAdmin = (id) => userStmts.makeAdmin.run({ id });
 // ---------- Products (shared) + this store's price ----------
 // Every product query is made "as" a store: `price` is that store's price, or null if not set.
 const PRODUCT_COLUMNS = `
-  p.id, p.product_id, p.barcode, p.product_name, p.created_at, p.updated_at,
-  sp.price_cents, sp.updated_at AS price_updated_at`;
+  p.id, p.barcode, p.product_name, p.created_at, p.updated_at,
+  sp.price_cents, sp.updated_at AS price_updated_at, f.position AS favorite_position`;
 const PRODUCT_FROM = `
   FROM products p
-  LEFT JOIN store_prices sp ON sp.product_id = p.id AND sp.user_id = $userId`;
+  LEFT JOIN store_prices sp ON sp.product_id = p.id AND sp.user_id = $userId
+  LEFT JOIN store_favorites f ON f.product_id = p.id AND f.user_id = $userId`;
 
 const toProduct = (row) =>
   row && {
     id: row.id,
-    productId: row.product_id,
     barcode: row.barcode,
     productName: row.product_name,
     price: row.price_cents == null ? null : row.price_cents / 100,
     priceUpdatedAt: row.price_updated_at ?? null,
+    isFavorite: row.favorite_position != null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+
+export const MAX_FAVORITES = 60;
 
 // Prepared by migrate(), once the tables are guaranteed to exist.
 let stmts;
@@ -135,16 +167,26 @@ const prepareProductStmts = () => ({
   byId: db.prepare(`SELECT ${PRODUCT_COLUMNS} ${PRODUCT_FROM} WHERE p.id = $id`),
   list: db.prepare(`
     SELECT ${PRODUCT_COLUMNS} ${PRODUCT_FROM}
-    WHERE ($q = '' OR p.barcode LIKE $like OR p.product_id LIKE $like OR p.product_name LIKE $like)
+    WHERE ($q = '' OR p.barcode LIKE $like OR p.product_name LIKE $like OR CAST(p.id AS TEXT) = $q)
       AND ($pricedOnly = 0 OR sp.price_cents IS NOT NULL)
     ORDER BY p.product_name COLLATE NOCASE
-    LIMIT 500`),
+    LIMIT $limit`),
+  favorites: db.prepare(`
+    SELECT ${PRODUCT_COLUMNS} ${PRODUCT_FROM}
+    WHERE f.position IS NOT NULL
+    ORDER BY f.position
+    LIMIT ${MAX_FAVORITES}`),
+  addFavorite: db.prepare(`
+    INSERT OR IGNORE INTO store_favorites (user_id, product_id, position)
+    SELECT $userId, $productId, coalesce(max(position), 0) + 1 FROM store_favorites WHERE user_id = $userId`),
+  removeFavorite: db.prepare('DELETE FROM store_favorites WHERE user_id = $userId AND product_id = $productId'),
+  countFavorites: db.prepare('SELECT count(*) AS n FROM store_favorites WHERE user_id = $userId'),
   insert: db.prepare(`
-    INSERT INTO products (product_id, barcode, product_name, created_by)
-    VALUES ($productId, $barcode, $productName, $createdBy)`),
+    INSERT INTO products (barcode, product_name, created_by)
+    VALUES ($barcode, $productName, $createdBy)`),
   update: db.prepare(`
     UPDATE products
-    SET product_id = $productId, barcode = $barcode, product_name = $productName, updated_at = datetime('now')
+    SET barcode = $barcode, product_name = $productName, updated_at = datetime('now')
     WHERE id = $id`),
   remove: db.prepare('DELETE FROM products WHERE id = $id'),
   setPrice: db.prepare(`
@@ -156,16 +198,34 @@ const prepareProductStmts = () => ({
 export const findByBarcode = (userId, barcode) => toProduct(stmts.byBarcode.get({ userId, barcode }));
 export const findById = (userId, id) => toProduct(stmts.byId.get({ userId, id }));
 
-export const listProducts = (userId, { q = '', pricedOnly = false } = {}) => {
+export const listProducts = (userId, { q = '', pricedOnly = false, limit = 500 } = {}) => {
   const like = `%${q.replace(/[%_]/g, '')}%`;
-  return stmts.list.all({ userId, q, like, pricedOnly: pricedOnly ? 1 : 0 }).map(toProduct);
+  return stmts.list.all({ userId, q, like, pricedOnly: pricedOnly ? 1 : 0, limit }).map(toProduct);
+};
+
+/**
+ * Existing products whose name shares a word with `name` — shown as "Did you mean…?" before
+ * adding a product, to avoid duplicates like "Itlog" vs "Itlog (large)" in the shared list.
+ */
+export const findSimilar = (userId, name, limit = 5) => {
+  const words = [...new Set(name.toLowerCase().match(/[\p{L}\p{N}]{3,}/gu) ?? [])].slice(0, 6);
+  if (!words.length) return [];
+  const params = { userId, limit };
+  const where = words.map((w, i) => ((params[`w${i}`] = `%${w}%`), `p.product_name LIKE $w${i}`)).join(' OR ');
+  // Rank by how many words match, then shortest name (closest) first.
+  const score = words.map((_, i) => `(p.product_name LIKE $w${i})`).join(' + ');
+  return db
+    .prepare(`SELECT ${PRODUCT_COLUMNS} ${PRODUCT_FROM} WHERE ${where}
+              ORDER BY ${score} DESC, length(p.product_name) LIMIT $limit`)
+    .all(params)
+    .map(toProduct);
 };
 
 /** Adds a shared product and, optionally, the creating store's price — atomically. */
-export const createProduct = (userId, { productId, barcode, productName, priceCents }) => {
+export const createProduct = (userId, { barcode, productName, priceCents }) => {
   db.exec('BEGIN');
   try {
-    const { lastInsertRowid } = stmts.insert.run({ productId, barcode, productName, createdBy: userId });
+    const { lastInsertRowid } = stmts.insert.run({ barcode, productName, createdBy: userId });
     const id = Number(lastInsertRowid);
     if (priceCents != null) stmts.setPrice.run({ userId, productId: id, priceCents });
     db.exec('COMMIT');
@@ -176,8 +236,8 @@ export const createProduct = (userId, { productId, barcode, productName, priceCe
   }
 };
 
-export const updateProduct = (userId, id, { productId, barcode, productName }) => {
-  const { changes } = stmts.update.run({ id, productId, barcode, productName });
+export const updateProduct = (userId, id, { barcode, productName }) => {
+  const { changes } = stmts.update.run({ id, barcode, productName });
   return changes ? findById(userId, id) : null;
 };
 
@@ -191,3 +251,15 @@ export const setPrice = (userId, id, priceCents) => {
 };
 
 export const clearPrice = (userId, id) => stmts.clearPrice.run({ userId, productId: id }).changes > 0;
+
+// ---------- Quick picks (per store) ----------
+export const listFavorites = (userId) => stmts.favorites.all({ userId }).map(toProduct);
+
+/** Pins a product to this store's quick picks. Returns false if the store already has the maximum. */
+export const addFavorite = (userId, productId) => {
+  if (stmts.countFavorites.get({ userId }).n >= MAX_FAVORITES) return false;
+  stmts.addFavorite.run({ userId, productId });
+  return true;
+};
+
+export const removeFavorite = (userId, productId) => stmts.removeFavorite.run({ userId, productId }).changes > 0;

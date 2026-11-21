@@ -4,6 +4,7 @@ import { useAuth } from '../auth.jsx';
 import { useMoney } from '../money.js';
 import ProductForm from '../components/ProductForm.jsx';
 import PriceForm from '../components/PriceForm.jsx';
+import { PinButton } from '../components/QuickPicks.jsx';
 
 /** The shared product list, with this store's prices. Admins can also edit/delete products. */
 export default function ProductsPage() {
@@ -42,6 +43,15 @@ export default function ProductsPage() {
     }
   };
 
+  const togglePin = async (p) => {
+    try {
+      await api.setFavorite(p.id, !p.isFavorite);
+      replace({ ...p, isFavorite: !p.isFavorite });
+    } catch (err) {
+      onError(err);
+    }
+  };
+
   const remove = async (p) => {
     if (!confirm(`Delete "${p.productName}" (barcode ${p.barcode}) for ALL stores? Every store's price for it is deleted too.`))
       return;
@@ -59,7 +69,7 @@ export default function ProductsPage() {
         <h1>Products &amp; my prices</h1>
         <input
           type="search"
-          placeholder="Search barcode, product ID or name"
+          placeholder="Search name, barcode or ID"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
@@ -82,16 +92,23 @@ export default function ProductsPage() {
             load();
           }}
           onError={onError}
+          onPick={(p) => {
+            setEditing(null);
+            setQuery(p.productName);
+          }}
         />
       )}
+
+      <p className="muted hint">☆ pins a product to your quick-pick buttons on the Scanner.</p>
 
       <div className="table-wrap">
         <table>
           <thead>
             <tr>
+              <th aria-label="Quick pick" />
+              <th>ID</th>
               <th>Product Name</th>
               <th>Barcode</th>
-              <th>Product ID</th>
               <th className="num">My price</th>
               <th />
             </tr>
@@ -99,16 +116,19 @@ export default function ProductsPage() {
           <tbody>
             {products.length === 0 && (
               <tr>
-                <td colSpan={5} className="muted center">
+                <td colSpan={6} className="muted center">
                   {query || pricedOnly ? 'No matching products.' : 'No products yet. Click “Add product” or scan one.'}
                 </td>
               </tr>
             )}
             {products.map((p) => (
               <tr key={p.id}>
+                <td className="pin-cell">
+                  <PinButton product={p} onToggle={togglePin} className="secondary small" />
+                </td>
+                <td className="muted">{p.id}</td>
                 <td>{p.productName}</td>
-                <td className="mono">{p.barcode}</td>
-                <td>{p.productId}</td>
+                <td className="mono">{p.barcode ?? <span className="muted">—</span>}</td>
                 <td className="num">
                   {pricing === p.id ? (
                     <PriceForm

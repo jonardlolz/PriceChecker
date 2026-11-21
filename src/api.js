@@ -46,11 +46,14 @@ export const api = {
   me: () => request('/api/me'),
 
   lookup: (barcode) => request(`/api/lookup/${encodeURIComponent(barcode)}`),
-  listProducts: ({ q: search = '', pricedOnly = false } = {}) =>
-    request(`/api/products?${q({ q: search, ...(pricedOnly && { priced: '1' }) })}`),
+  listProducts: ({ q: search = '', pricedOnly = false, limit } = {}) =>
+    request(`/api/products?${q({ q: search, ...(pricedOnly && { priced: '1' }), ...(limit && { limit }) })}`),
+  similarProducts: (name) => request(`/api/products/similar?${q({ name })}`),
   createProduct: (p) => request('/api/products', { method: 'POST', body: p }),
   setPrice: (id, price) => request(`/api/products/${id}/price`, { method: 'PUT', body: { price } }),
   clearPrice: (id) => request(`/api/products/${id}/price`, { method: 'DELETE' }),
+  favorites: () => request('/api/favorites'),
+  setFavorite: (id, on) => request(`/api/products/${id}/favorite`, { method: on ? 'PUT' : 'DELETE' }),
 
   // Admin only
   updateProduct: (id, p) => request(`/api/products/${id}`, { method: 'PUT', body: p }),

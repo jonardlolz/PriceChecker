@@ -158,21 +158,17 @@ function parsePrice(raw, errors, { required }) {
 
 function parseProduct(body = {}, { withPrice }) {
   const errors = {};
-  const productId = String(body.productId ?? '').trim();
   const barcode = String(body.barcode ?? '').trim();
   const productName = String(body.productName ?? '').trim();
 
-  if (!productId) errors.productId = 'Product ID is required';
-  else if (productId.length > 64) errors.productId = 'Product ID is too long';
-
-  if (!barcode) errors.barcode = 'Barcode is required';
-  else if (!/^[\x21-\x7E]{1,128}$/.test(barcode)) errors.barcode = 'Barcode contains invalid characters';
+  // Barcode is optional: loose (tingi) items like eggs or candy per piece have none.
+  if (barcode && !/^[\x21-\x7E]{1,128}$/.test(barcode)) errors.barcode = 'Barcode contains invalid characters';
 
   if (!productName) errors.productName = 'Product name is required';
   else if (productName.length > 200) errors.productName = 'Product name is too long';
 
   const priceCents = withPrice ? parsePrice(body.price, errors, { required: false }) : null;
-  return { errors, value: { productId, barcode, productName, priceCents } };
+  return { errors, value: { barcode: barcode || null, productName, priceCents } };
 }
 
 function parseSignup(body = {}) {
@@ -195,9 +191,6 @@ function handleDbError(err, res) {
   const msg = String(err?.message || '');
   if (msg.includes('UNIQUE constraint failed: products.barcode')) {
     return res.status(409).json({ errors: { barcode: 'This barcode is already assigned to another product' } });
-  }
-  if (msg.includes('UNIQUE constraint failed: products.product_id')) {
-    return res.status(409).json({ errors: { productId: 'This Product ID already exists' } });
   }
   if (msg.includes('UNIQUE constraint failed: users.username')) {
     return res.status(409).json({ errors: { username: 'This username is already taken' } });
@@ -272,12 +265,40 @@ store.get('/lookup/:barcode', (req, res) => {
 });
 
 store.get('/products', (req, res) => {
+  const limit = Math.min(Math.max(Number.parseInt(req.query.limit, 10) || 500, 1), 500);
   res.json(
     db.listProducts(req.user.id, {
-      q: String(req.query.q ?? '').trim(),
+      q: String(req.query.q ?? '').trim().slice(0, 200),
       pricedOnly: req.query.priced === '1',
+      limit,
     })
   );
+});
+
+// "Did you mean…?" suggestions while adding a product.
+store.get('/products/similar', (req, res) => {
+  res.json(db.findSimilar(req.user.id, String(req.query.name ?? '').slice(0, 200)));
+});
+
+// Quick picks: this store's pinned products, shown as buttons on the scanner.
+store.get('/favorites', (req, res) => res.json(db.listFavorites(req.user.id)));
+
+store.put('/products/:id/favorite', (req, res) => {
+  const id = parseDbId(req, res);
+  if (id === null) return;
+  const product = db.findById(req.user.id, id);
+  if (!product) return res.status(404).json({ error: 'Product not found' });
+  if (!product.isFavorite && !db.addFavorite(req.user.id, id)) {
+    return res.status(409).json({ error: `You can pin up to ${db.MAX_FAVORITES} quick picks. Unpin one first.` });
+  }
+  res.json(db.findById(req.user.id, id));
+});
+
+store.delete('/products/:id/favorite', (req, res) => {
+  const id = parseDbId(req, res);
+  if (id === null) return;
+  db.removeFavorite(req.user.id, id);
+  res.status(204).end();
 });
 
 // Any store may add a new shared product (and set its own price in the same step).

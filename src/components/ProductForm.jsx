@@ -1,21 +1,23 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from '../api.js';
+import { useMoney } from '../money.js';
 import CameraScanner from './CameraScanner.jsx';
 import { Field } from './Login.jsx';
 
-const EMPTY = { productId: '', barcode: '', productName: '', price: '' };
+const EMPTY = { barcode: '', productName: '', price: '' };
 
 /**
  * Add a new shared product (any store; includes "your price"), or edit an existing
  * shared product (admin only; no price — prices are edited per store).
- * Pass `initial` with an `id` to edit; without an `id` (e.g. `{ barcode }`) to prefill a new one.
+ * Pass `initial` with an `id` to edit; without an `id` (e.g. `{ barcode }` or `{ productName }`)
+ * to prefill a new one. `onPick(product)` is called when the user picks an existing product
+ * from the "Did you mean…?" suggestions instead of adding a duplicate.
  */
-export default function ProductForm({ initial, title, onCancel, onSaved, onError, autoFocusField = 'productName' }) {
+export default function ProductForm({ initial, title, onCancel, onSaved, onError, onPick, autoFocusField = 'productName' }) {
   const isEdit = initial?.id != null;
   const [form, setForm] = useState(() => ({
     ...EMPTY,
     ...(initial && {
-      productId: initial.productId ?? '',
       barcode: initial.barcode ?? '',
       productName: initial.productName ?? '',
     }),
@@ -23,6 +25,8 @@ export default function ProductForm({ initial, title, onCancel, onSaved, onError
   const [errors, setErrors] = useState({});
   const [busy, setBusy] = useState(false);
   const [camera, setCamera] = useState(false);
+  const similar = useSimilar(isEdit ? '' : form.productName);
+  const money = useMoney();
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
@@ -42,7 +46,7 @@ export default function ProductForm({ initial, title, onCancel, onSaved, onError
 
   return (
     <form className="card product-form" onSubmit={submit}>
-      <h2>{title ?? (isEdit ? 'Edit shared product' : 'Add product')}</h2>
+      <h2>{title ?? (isEdit ? `Edit shared product #${initial.id}` : 'Add product')}</h2>
       <p className="muted">
         {isEdit
           ? 'Changes apply to every store. Prices are not affected.'
@@ -50,25 +54,53 @@ export default function ProductForm({ initial, title, onCancel, onSaved, onError
       </p>
       <div className="grid">
         <Field label="Product Name" error={errors.productName}>
-          <input value={form.productName} onChange={set('productName')} autoFocus={autoFocusField === 'productName'} />
+          <input
+            value={form.productName}
+            onChange={set('productName')}
+            placeholder="e.g. Itlog (large), per piece"
+            autoFocus={autoFocusField === 'productName'}
+          />
         </Field>
         {!isEdit && (
           <Field label="Your price (optional)" error={errors.price}>
             <input value={form.price} onChange={set('price')} inputMode="decimal" placeholder="0.00" />
           </Field>
         )}
-        <Field label="Product ID" error={errors.productId}>
-          <input value={form.productId} onChange={set('productId')} autoFocus={autoFocusField === 'productId'} />
-        </Field>
-        <Field label="Barcode" error={errors.barcode}>
+        <Field label="Barcode (optional)" error={errors.barcode}>
           <div className="inline">
-            <input value={form.barcode} onChange={set('barcode')} className="mono" />
+            <input value={form.barcode} onChange={set('barcode')} className="mono" placeholder="None — loose item" />
             <button type="button" className="secondary small" onClick={() => setCamera((c) => !c)}>
               {camera ? 'Close' : 'Scan'}
             </button>
           </div>
         </Field>
       </div>
+
+      {similar.length > 0 && (
+        <div className="similar">
+          <p className="similar-title">Already in the list — is it one of these?</p>
+          <ul>
+            {similar.map((p) => (
+              <li key={p.id}>
+                <span className="similar-name">
+                  {p.productName}
+                  <small className="muted">
+                    {' '}#{p.id}
+                    {p.barcode && ` · ${p.barcode}`}
+                    {p.price != null && ` · ${money(p.price)}`}
+                  </small>
+                </span>
+                {onPick && (
+                  <button type="button" className="secondary small" onClick={() => onPick(p)}>
+                    Use this
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {camera && (
         <CameraScanner
           onDetected={(text) => {
@@ -82,9 +114,30 @@ export default function ProductForm({ initial, title, onCancel, onSaved, onError
           Cancel
         </button>
         <button type="submit" disabled={busy}>
-          {busy ? 'Saving…' : 'Save'}
+          {busy ? 'Saving…' : similar.length ? 'Save as new product' : 'Save'}
         </button>
       </div>
     </form>
   );
+}
+
+/** Existing products with a similar name (debounced). */
+function useSimilar(name) {
+  const [items, setItems] = useState([]);
+  useEffect(() => {
+    const trimmed = name.trim();
+    if (trimmed.length < 3) {
+      setItems([]);
+      return;
+    }
+    let cancelled = false;
+    const t = setTimeout(() => {
+      api.similarProducts(trimmed).then((r) => !cancelled && setItems(r)).catch(() => {});
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [name]);
+  return items;
 }
