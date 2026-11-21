@@ -1,6 +1,7 @@
-# Every push to main: test on GitHub's servers, then deploy on the production laptop
-# (the self-hosted runner labelled `pricechecker-prod`). Can also be started by hand from
-# the Actions tab ("Run workflow"), e.g. to redeploy.
+# Every push to main: deploy on the production laptop (the self-hosted runner labelled
+# `pricechecker-prod`). deploy/deploy.sh builds the release and runs the smoke test on it
+# before switching over, so a failing test never goes live. Can also be started by hand
+# from the Actions tab ("Run workflow"), e.g. to redeploy.
 #
 # Security: the self-hosted runner only ever runs this workflow, which only triggers on pushes
 # to main (needs write access) or manual runs. Pull requests never reach the laptop.
@@ -20,11 +21,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  test:
-    uses: ./.github/workflows/ci.yml
-
   deploy:
-    needs: test
     if: github.ref == 'refs/heads/main'
     runs-on: [self-hosted, pricechecker-prod]
     timeout-minutes: 15

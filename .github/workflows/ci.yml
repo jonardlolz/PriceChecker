@@ -1,12 +1,10 @@
 # Build + smoke test on GitHub's own servers (never on the production laptop).
-# Runs for pull requests and non-main branches; `main` runs it as the first step of Deploy.
+# Runs for pull requests and every branch (main is additionally tested on the laptop by Deploy).
 name: CI
 
 on:
   pull_request:
   push:
-    branches-ignore: [main]
-  workflow_call:
 
 permissions:
   contents: read

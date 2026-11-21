@@ -82,16 +82,13 @@ Stop it on the old one, copy `data/` (and `.env` if needed) to the new one, then
 Production runs on **this laptop** and always runs what is on the **`main` branch on GitHub**.
 
 ```
-git push (main) ──► GitHub Actions: CI (build + smoke test, on GitHub's servers)
-                         │ passes
-                         ▼
-                   self-hosted runner on this laptop ──► deploy/deploy.sh
-                         back up DB → build new release → restart → health check
-                         (fails? automatic rollback to the previous release + DB backup)
+git push (main) ──► GitHub Actions ──► self-hosted runner on this laptop ──► deploy/deploy.sh
+                       build new release → smoke test it → back up DB → restart → health check
+                       (test fails? nothing changes · health check fails? automatic rollback)
 ```
 
 - **Pull requests / other branches:** only CI runs (on GitHub's servers). Nothing touches the laptop.
-- **Push or merge to `main`:** CI, then automatic deploy. Watch it in the repo's **Actions** tab.
+- **Push or merge to `main`:** automatic deploy (plus CI on GitHub's servers). Watch it in the repo's **Actions** tab.
 - **Redeploy by hand:** Actions → *Deploy* → *Run workflow*.
 - Run the smoke test locally: `npm run build && npm test`.
 

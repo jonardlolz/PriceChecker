@@ -49,6 +49,9 @@ rsync -a --delete --exclude .git --exclude node_modules --exclude dist \
 cd "$RELEASE"
 npm ci --no-audit --no-fund
 npm run build
+# Smoke test this exact release on a throwaway database before it goes live.
+log "Testing release $NAME"
+npm test || { rm -rf "$RELEASE"; die "Smoke test failed — nothing was deployed."; }
 npm prune --omit=dev --no-audit --no-fund
 ln -sfn "$SHARED/.env" "$RELEASE/.env"
 
